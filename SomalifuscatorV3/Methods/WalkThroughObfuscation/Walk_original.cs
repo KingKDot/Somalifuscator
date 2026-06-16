@@ -1,0 +1,323 @@
+﻿using SomalifuscatorV3.Methods.Generators;
+using SomalifuscatorV3.Methods.NumericObfuscation;
+using SomalifuscatorV3.Methods.Obfuscation.DynamicObfuscation;
+using SomalifuscatorV3.Obfuscation;
+using SomalifuscatorV3.GlobalSettings;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Diagnostics;
+
+namespace SomalifuscatorV3.Methods.WalkThroughObfuscation
+{
+    public class Walk
+    {
+        private readonly List<BlockGroup> _mainBlockGroups = [];
+        private readonly List<char> _ignoreChars = [' ', '\n', '\r', '\t', '#', '$', '\'', '.', '?', '[', ']', '_', '`', '{', '}', '~'];
+        private readonly HashSet<int> _usedPointers = [];
+        private readonly Random _random = new();
+        private readonly char[] _goodStartObfChars = [';', ',', ' '];
+
+        private int GenerateUniquePointer()
+        {
+            int pointer;
+            do
+            {
+                pointer = _random.Next(100000, 1000000);
+            } while (_usedPointers.Contains(pointer));
+            _usedPointers.Add(pointer);
+            return pointer;
+        }
+
+        public string WalkThrough(List<string> lines)
+        {
+            if (lines == null || lines.Count == 0)
+                return string.Empty;
+
+            if (Settings.UseBlockObfuscation)
+            {
+                return WalkThroughWithBlockObfuscation(lines);
+            }
+            else
+            {
+                return WalkThroughLinear(lines);
+            }
+        }
+
+        private string WalkThroughLinear(List<string> lines)
+        {
+            _mainBlockGroups.Clear();
+
+            var blockGroup = new BlockGroup();
+
+            blockGroup.AddBlock("@echo off");
+            blockGroup.AddBlock("setlocal EnableDelayedExpansion");
+
+            int varCount = _random.Next(10, 30);
+            for (int i = 0; i < varCount; i++)
+            {
+                var (outVariable, variableName, variableValue) = VariableGenerator.GenerateVariable();
+                outVariable = outVariable.TrimEnd();
+                blockGroup.AddBlock(ObfuscateLineWithStart(outVariable));
+
+                GlobalVariableHolder.Variable newVar = new()
+                {
+                    Name = variableName,
+                    Value = variableValue
+                };
+                GlobalVariableHolder.Variables.Add(newVar);
+            }
+
+            foreach (string line in lines)
+            {
+                if (line.TrimStart().StartsWith(":"))
+                {
+                    blockGroup.AddBlock(ObfuscateLine(line));
+                }
+                else
+                {
+                    blockGroup.AddBlock(ObfuscateLineWithStart(line));
+                }
+
+                if (_random.Next(0, 4) == 0)
+                {
+                    var (outVariable, variableName, variableValue) = VariableGenerator.GenerateVariable();
+                    outVariable = outVariable.TrimEnd();
+                    blockGroup.AddBlock(ObfuscateLineWithStart(outVariable));
+
+                    GlobalVariableHolder.Variable newVar = new()
+                    {
+                        Name = variableName,
+                        Value = variableValue
+                    };
+                    GlobalVariableHolder.Variables.Add(newVar);
+                }
+            }
+
+            _mainBlockGroups.Add(blockGroup);
+            return GenerateOutput();
+        }
+
+        private string WalkThroughWithBlockObfuscation(List<string> lines)
+        {
+            List<int> pointers = new List<int>();
+            for (int i = 0; i <= lines.Count + 100; i++)
+            {
+                pointers.Add(GenerateUniquePointer());
+            }
+
+            var entryBlock = new BlockGroup();
+            entryBlock.AddBlock($"{ObfuscateLine("set /a ans=")}{pointers[0]}");
+            entryBlock.AddBlock($"{ObfuscateLineWithStart("goto")} %ans%");
+            _mainBlockGroups.Add(entryBlock);
+
+            for (int i = 0; i < 100; i++)
+            {
+                var blockGroup = new BlockGroup();
+
+                blockGroup.AddBlock($":{pointers[i]}");
+
+                var (outVariable, variableName, variableValue) = VariableGenerator.GenerateVariable();
+                outVariable = outVariable.TrimEnd();
+                blockGroup.AddBlock(ObfuscateLineWithStart(outVariable));
+
+                GlobalVariableHolder.Variable newVar = new()
+                {
+                    Name = variableName,
+                    Value = variableValue
+                };
+                GlobalVariableHolder.Variables.Add(newVar);
+
+                int nextPointer = pointers[i + 1];
+                string obfuscatedNumber = ObfuscateNumbers.ObfuscateNumber(nextPointer.ToString());
+
+                Debug.WriteLine(obfuscatedNumber);
+
+                blockGroup.AddBlock(ObfuscateLineWithStart($"set /a ans={obfuscatedNumber}"));
+                blockGroup.AddBlock(ObfuscateLineWithStart("goto") + " %ans%");
+
+                _mainBlockGroups.Add(blockGroup);
+            }
+
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string line = lines[i];
+                var blockGroup = new BlockGroup();
+
+                blockGroup.AddBlock($":{pointers[i + 100]}");
+
+                if (_random.Next(0, 2) == 0)
+                {
+                    var (outVariable, variableName, variableValue) = VariableGenerator.GenerateVariable();
+                    outVariable = outVariable.TrimEnd();
+                    blockGroup.AddBlock(ObfuscateLineWithStart(outVariable));
+
+                    GlobalVariableHolder.Variable newVar = new()
+                    {
+                        Name = variableName,
+                        Value = variableValue
+                    };
+                    GlobalVariableHolder.Variables.Add(newVar);
+                }
+
+                if (line.TrimStart().StartsWith(":"))
+                {
+                    blockGroup.AddBlock(ObfuscateLine(line));
+                }
+                else
+                {
+                    blockGroup.AddBlock(ObfuscateLineWithStart(line));
+                }
+
+                int nextPointer = (i == lines.Count - 1) ? pointers[pointers.Count - 1] : pointers[i + 101];
+                string obfuscatedNumber = ObfuscateNumbers.ObfuscateNumber(nextPointer.ToString());
+                blockGroup.AddBlock(ObfuscateLineWithStart($"set /a ans={obfuscatedNumber}"));
+                blockGroup.AddBlock(ObfuscateLineWithStart("goto") + " %ans%");
+
+                _mainBlockGroups.Add(blockGroup);
+            }
+
+            var endBlock = new BlockGroup();
+            endBlock.AddBlock($":{pointers[pointers.Count - 1]}");
+            endBlock.AddBlock(ObfuscateLineWithStart("goto :EOF"));
+            _mainBlockGroups.Add(endBlock);
+
+            ShuffleBlocks();
+
+            return GenerateOutput();
+        }
+
+        private string ObfuscateStart()
+        {
+            var random = new Random();
+            var randomChars = new List<char>();
+            for (int i = 0; i < 10; i++)
+            {
+                randomChars.Add(_goodStartObfChars[random.Next(0, _goodStartObfChars.Length)]);
+            }
+            string randomString = string.Join("", randomChars);
+
+            return randomString;
+        }
+
+        private string ObfuscateLineWithStart(string line)
+        {
+            if (line.TrimStart().StartsWith(":"))
+                return ObfuscateLine(line);
+
+            return ObfuscateStart() + ObfuscateLine(line);
+        }
+
+        private string GenerateOutput()
+        {
+            var output = new StringBuilder();
+
+            output.AppendLine("@echo off");
+            output.AppendLine("setlocal EnableDelayedExpansion");
+
+            foreach (var blockGroup in _mainBlockGroups)
+            {
+                foreach (var block in blockGroup.Blocks)
+                {
+                    output.AppendLine(block);
+                }
+            }
+
+            return output.ToString();
+        }
+
+        private string ObfuscateLine(string line)
+        {
+            var regex = new System.Text.RegularExpressions.Regex(@"(%~[a-zA-Z0-9]+|%[a-zA-Z0-9_]+%|%[0-9])");
+            var obfuscatedLine = new StringBuilder();
+
+            int lastIndex = 0;
+            foreach (System.Text.RegularExpressions.Match match in regex.Matches(line))
+            {
+                if (match.Index > lastIndex)
+                {
+                    string beforeVar = line.Substring(lastIndex, match.Index - lastIndex);
+                    obfuscatedLine.Append(ObfuscateText(beforeVar));
+                }
+                obfuscatedLine.Append(match.Value);
+                lastIndex = match.Index + match.Length;
+            }
+            if (lastIndex < line.Length)
+            {
+                obfuscatedLine.Append(ObfuscateText(line.Substring(lastIndex)));
+            }
+
+            return obfuscatedLine.ToString().TrimEnd();
+        }
+
+        private string ObfuscateText(string text)
+        {
+            var obfuscated = new StringBuilder();
+            foreach (var word in text.Split(' '))
+            {
+                foreach (char character in word)
+                {
+                    if (_ignoreChars.Contains(character))
+                    {
+                        obfuscated.Append(character);
+                        continue;
+                    }
+                    var obfuscatedChar = DynamicOBF.Obfuscate(character);
+                    obfuscated.Append(obfuscatedChar);
+                }
+                obfuscated.Append(' ');
+            }
+            return obfuscated.ToString();
+        }
+
+        public void VisualizeBlocks()
+        {
+            for (int i = 0; i < _mainBlockGroups.Count; i++)
+            {
+                Console.WriteLine($"Block Group {i + 1}:");
+                foreach (var block in _mainBlockGroups[i].Blocks)
+                {
+                    Console.WriteLine($"  Block: {block}");
+                }
+            }
+        }
+
+        public void ShuffleBlocks()
+        {
+            if (!Settings.UseBlockObfuscation)
+                return;
+
+            int n = _mainBlockGroups.Count;
+            for (int i = 1; i < n; i++)
+            {
+                int k = _random.Next(i, n);
+                var temp = _mainBlockGroups[i];
+                _mainBlockGroups[i] = _mainBlockGroups[k];
+                _mainBlockGroups[k] = temp;
+            }
+        }
+    }
+
+    public class BlockGroup
+    {
+        public List<string> Blocks { get; } = new();
+
+        public void AddBlock(string block)
+        {
+            Blocks.Add(block);
+        }
+
+        public void RemoveBlock(string block)
+        {
+            Blocks.Remove(block);
+        }
+    }
+
+    public struct Variable
+    {
+        public string Name;
+        public string Value;
+    }
+}

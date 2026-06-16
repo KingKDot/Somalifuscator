@@ -1,0 +1,92 @@
+name: .NET Release
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            rid: win-x64
+            package_name: Somalifuscator-windows-x64.zip
+          - name: Linux x64
+            os: ubuntu-latest
+            rid: linux-x64
+            package_name: Somalifuscator-linux-x64.tar.gz
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Install Linux NativeAOT Dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Restore Dependencies
+        run: dotnet restore SomalifuscatorV3/SomalifuscatorV3.csproj
+
+      - name: Build
+        run: dotnet build SomalifuscatorV3/SomalifuscatorV3.csproj --no-restore --configuration Release
+
+      - name: Publish
+        run: dotnet publish SomalifuscatorV3/SomalifuscatorV3.csproj --configuration Release --runtime ${{ matrix.rid }} --self-contained true --output publish/${{ matrix.rid }}
+
+      - name: Package Windows Build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path publish/${{ matrix.rid }}/* -DestinationPath ${{ matrix.package_name }} -Force
+
+      - name: Package Linux Build
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          chmod +x publish/${{ matrix.rid }}/SomalifuscatorV3
+          tar -czf ${{ matrix.package_name }} -C publish/${{ matrix.rid }} .
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rid }}
+          path: ${{ matrix.package_name }}
+
+  release:
+    name: Publish AutoBuild Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Replace AutoBuild Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete AutoBuild --cleanup-tag --yes --repo "${{ github.repository }}" || true
+          gh release create AutoBuild release-assets/* \
+            --title "AutoBuild" \
+            --notes "Automated Windows and Linux builds." \
+            --target "${{ github.sha }}" \
+            --repo "${{ github.repository }}"
