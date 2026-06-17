@@ -7,9 +7,6 @@ namespace SomalifuscatorV3
 {
     internal class Program
     {
-        private const string DefaultInputFile = "C:\\Users\\this1\\Desktop\\Software\\SomalifuscatorV3Tests\\main.bat";
-        private const string DefaultOutputFile = "C:\\Users\\this1\\Desktop\\Software\\SomalifuscatorV3Tests\\out.bat";
-
         static void Main(string[] args)
         {
             var executionTimer = new ExecutionTimer();
@@ -60,8 +57,8 @@ namespace SomalifuscatorV3
 
         private static ObfuscationConfig ParseCommandLineArgs(string[] args)
         {
-            string inputFile = DefaultInputFile;
-            string outputFile = DefaultOutputFile;
+            string? inputFile = null;
+            string? outputFile = null;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -275,6 +272,12 @@ namespace SomalifuscatorV3
                         break;
                 }
             }
+
+            if (string.IsNullOrWhiteSpace(inputFile))
+                throw new ArgumentException("Input file is required. Use -i or --input <file>.");
+
+            if (string.IsNullOrWhiteSpace(outputFile))
+                throw new ArgumentException("Output file is required. Use -o or --output <file>.");
 
             return new ObfuscationConfig(inputFile, outputFile);
         }
